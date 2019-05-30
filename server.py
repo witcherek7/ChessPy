@@ -9,6 +9,7 @@ import logging
 import logging.handlers
 from multiprocessing import Process
 import signal
+import chess
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
@@ -18,13 +19,24 @@ handler = logging.handlers.SysLogHandler(address='/dev/log')
 handler.setFormatter(formatter)
 log.addHandler(handler)
 
+board = chess.Board()
 clients = []
+colors = ['WHITE', 'BLACK']
 server_address = ('', 6060)
 mcast_grp = '224.6.6.6'
 
-def signal_handler(sig, frame, conn):
+message_content = ''
+message_received = False
+
+
+current_board = ''
+info = ''
+
+
+def signal_handler(sig, frame):
     print('Closing connection.')
-    conn.close()
+    for conn in clients:
+        conn.close()
     exit()
 
 
@@ -60,7 +72,7 @@ def tcp_deamon():
             conn, addr = server_tcp.accept()
             clients.append(conn)
             log.info(f"{addr[0]} IS CONNECTED")
-            Thread(target=tcp_client, args=(conn,addr)).start()
+            Thread(target=tcp_client, args=(conn,addr, len(clients))).start()
             #start_new_thread(tcp_client(conn,addr))
             continue
         except Exception as e:
@@ -69,21 +81,80 @@ def tcp_deamon():
 
       
 
-def tcp_client(conn, addr):
-    conn.send(f"Hello, server here, you are connected.".encode())
+def tcp_client(conn, add, count):
+    #conn.send(f"Hello, server here, you are connected.".encode())
+    #conn.send(f"You are client number {count}".encode())
+
     while True:
         message = conn.recv(1024)
         message = message.decode()
-        #print(message)
+
+        chess_receive(message, conn, colors[count-1])
+        
+        print(message)
         if not message:
             break
+
     #print("Closing connection.")
     conn.close()          
 
 def test_class():
-        Thread(target=udp_deamon).start()
-        Thread(target=tcp_deamon).start()
-        log.info ("TCP and UDP threads started.")
+    global message_content
+    global message_received
+    turn = 'WHITE'
+    game_started = False
+    Thread(target=udp_deamon).start()
+    Thread(target=tcp_deamon).start()
+    log.info ("TCP and UDP threads started.")
+    signal.signal(signal.SIGINT, signal_handler)
+
+    while True:
+        if(len(clients)==2 and game_started==False):
+
+            game_started = True
+            color_count = 0
+            for conn in clients:
+                conn.send(f"Info:Starting the game.".encode())
+                conn.send(f"Color:{colors[color_count]}".encode())
+                color_count = color_count + 1
+                conn.send(f"Turn:{turn}".encode())
+                conn.send(f"Board:{board.board_fen()}".encode())
+                conn.send(f"Info: White starts.".encode())
+        
+        if(len(clients)==2 and game_started==True):
+            if(message_received):
+                print("Message received.")
+                for conn in clients:
+                    turn_done = turn
+
+                    if(turn =='WHITE'):
+                        turn ='BLACK'
+                    else:
+                        turn = 'WHITE'
+
+                    conn.send(f"Turn:{turn}".encode())
+                    conn.send(f"Board:{board.board_fen()}".encode())
+                    conn.send(f"Info:Move done by {turn_done} {message_content}".encode())
+
+                message_received = False    
+
+
+def chess_receive(message, conn, color):
+    global message_content
+    global message_received
+    print("Chess received.")
+    try:
+        chess_move = chess.Move.from_uci(message)
+        board.push(chess_move)       
+        message_received = True
+        print("Passed.")
+        message_conent = message
+    except:
+        print("Something invalid.")
+        conn.send("Info: Invalid input.".encode())
+
+
+    
         
 
 test_class()
